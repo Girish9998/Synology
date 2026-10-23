@@ -1,0 +1,10 @@
+.env
+.nas_credentials
+.nas_key
+*.key
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
+Thumbs.db
