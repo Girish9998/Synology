@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet
 # Automatically load .env file from project directory if present
 try:
     from dotenv import load_dotenv, find_dotenv
-    load_dotenv(find_dotenv(usecwd=True))
+    load_dotenv(find_dotenv(usecwd=True), override=True)
 except Exception:
     pass
 

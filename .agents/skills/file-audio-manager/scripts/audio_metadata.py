@@ -17,6 +17,9 @@ Commands:
     export      Export metadata to JSON or CSV
     import      Import metadata from JSON or CSV and apply to files
     artwork     Extract or embed cover art
+    auto-tag    Auto-match & tag files using iTunes API
+    fetch-art   Fetch and embed 1000x1000 cover art from iTunes
+    lyrics      Fetch lyrics from LRCLIB, embed plain lyrics and save .lrc
 """
 
 from __future__ import annotations
@@ -46,6 +49,12 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+try:
+    from audio_logger import log_operation, log_failure, logger
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from audio_logger import log_operation, log_failure, logger
 
 # ---------------------------------------------------------------------------
 # Mutagen imports
@@ -80,6 +89,54 @@ FIELD_NAMES = [
     "discnumber", "totaldiscs", "year", "genre", "comment", "composer",
     "lyrics", "bpm",
 ]
+
+def find_workspace_root() -> Path:
+    """Traverse upwards to locate the workspace root containing requirements.txt, .git, or config.json."""
+    curr = Path(__file__).resolve().parent
+    for _ in range(6):
+        if (curr / "requirements.txt").exists() or (curr / ".git").exists() or (curr / "config.json").exists():
+            return curr
+        if curr.parent == curr:
+            break
+        curr = curr.parent
+    return Path.cwd()
+
+
+CONFIG_SEARCH_PATHS = [
+    find_workspace_root() / "config.json",
+    Path(__file__).resolve().parent.parent / "config.json",
+    Path(__file__).resolve().parent / "config.json",
+]
+
+
+def load_config() -> Dict[str, Any]:
+    """Load config.json from workspace root or return robust defaults."""
+    for p in CONFIG_SEARCH_PATHS:
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                    if "audio" in raw:
+                        return raw["audio"]
+                    return raw
+            except Exception:
+                pass
+    return {
+        "artwork": {
+            "provider_order": ["itunes", "jiosaavn", "deezer"],
+            "request_delay_seconds": 0.25,
+            "min_confidence": 60.0,
+            "providers": {
+                "itunes": {"enabled": True},
+                "jiosaavn": {"enabled": True},
+                "deezer": {"enabled": True}
+            }
+        },
+        "lyrics": {
+            "provider_order": ["lrclib"],
+            "providers": {"lrclib": {"enabled": True}}
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +600,9 @@ def cmd_write(file: str, **kwargs) -> None:
         for field, value in tags_to_write.items():
             af.set(field, value)
         af.save()
+        log_operation("WRITE_TAGS", str(path), details=f"Fields: {', '.join(tags_to_write.keys())}", extra=tags_to_write)
     except Exception as exc:
+        log_failure("WRITE_TAGS", str(path), reason=str(exc), exc=exc, context=tags_to_write)
         err(f"Failed to write tags: {exc}")
         sys.exit(1)
 
@@ -637,7 +696,9 @@ def cmd_clear(file: str, fields: tuple, clear_all: bool, force: bool) -> None:
             for field in fields:
                 af.clear_field(field)
         af.save()
+        log_operation("CLEAR_TAGS", str(path), details=action)
     except Exception as exc:
+        log_failure("CLEAR_TAGS", str(path), reason=str(exc), exc=exc, context={"action": action})
         err(str(exc))
         sys.exit(1)
 
@@ -971,6 +1032,194 @@ def score_candidate(
     return round(min(100.0, title_score + artist_score + duration_score), 1)
 
 
+def search_artwork_candidates(
+    queries: List[str],
+    local_title: str,
+    local_artist: str,
+    local_duration_sec: Optional[float],
+    provider_override: Optional[str] = None,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """Search artwork across configured providers (iTunes, JioSaavn, Deezer) with automatic fallback."""
+    cfg = load_config()
+    art_cfg = cfg.get("artwork", {})
+    provider_order = [provider_override] if provider_override else art_cfg.get("provider_order", ["itunes", "jiosaavn", "deezer"])
+    providers_meta = art_cfg.get("providers", {})
+    min_conf = art_cfg.get("min_confidence", 60.0)
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    for provider in provider_order:
+        p_cfg = providers_meta.get(provider, {})
+        if not p_cfg.get("enabled", True):
+            continue
+
+        candidates = []
+
+        if provider == "itunes":
+            seen_track_ids = set()
+            for q in queries:
+                if not q or len(q.strip()) < 2:
+                    continue
+                try:
+                    url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q.strip())}&entity=song&limit={limit}"
+                    resp = requests.get(url, timeout=7)
+                    if resp.status_code in (403, 429):
+                        # Rate limited, break and fall back to next provider
+                        break
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    for item in data.get("results", []):
+                        t_id = item.get("trackId")
+                        if t_id and t_id in seen_track_ids:
+                            continue
+                        seen_track_ids.add(t_id)
+
+                        score = score_candidate(item, q, local_title, local_artist, local_duration_sec)
+                        itunes_sec = item.get("trackTimeMillis", 0) / 1000.0
+                        dur_diff = abs(local_duration_sec - itunes_sec) if local_duration_sec else None
+
+                        art_100 = item.get("artworkUrl100", "")
+                        art_1000 = art_100.replace("100x100bb", "1000x1000bb") if art_100 else None
+
+                        candidates.append({
+                            "track_id": t_id,
+                            "title": item.get("trackName", ""),
+                            "artist": item.get("artistName", ""),
+                            "album": item.get("collectionName", ""),
+                            "albumartist": item.get("collectionArtistName") or item.get("artistName", ""),
+                            "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "",
+                            "genre": item.get("primaryGenreName", ""),
+                            "track_number": str(item.get("trackNumber", "")),
+                            "total_tracks": str(item.get("trackCount", "")),
+                            "duration_sec": itunes_sec,
+                            "duration_diff": dur_diff,
+                            "artwork_url_1000": art_1000,
+                            "confidence": score,
+                            "provider": "itunes",
+                            "raw": item
+                        })
+                except Exception:
+                    continue
+                if candidates and max(c["confidence"] for c in candidates) >= 85.0:
+                    break
+
+        elif provider == "jiosaavn":
+            for q in queries:
+                if not q or len(q.strip()) < 2:
+                    continue
+                try:
+                    url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&query={urllib.parse.quote(q.strip())}&_format=json&_marker=0&ctx=web6dot0"
+                    resp = requests.get(url, headers=headers, timeout=8)
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+
+                    # 1. Inspect songs
+                    for song in data.get("songs", {}).get("data", []):
+                        s_title = song.get("title", "")
+                        s_artist = song.get("more_info", {}).get("primary_artists", "") or song.get("more_info", {}).get("singers", "")
+                        t_sim = string_similarity(local_title, s_title)
+                        a_sim = string_similarity(local_artist, s_artist) if local_artist else 0.5
+                        score = round(min(100.0, (t_sim * 60.0) + (a_sim * 40.0)), 1)
+                        img = song.get("image", "").replace("50x50.jpg", "500x500.jpg")
+                        candidates.append({
+                            "track_id": song.get("id"),
+                            "title": s_title,
+                            "artist": s_artist,
+                            "album": song.get("album", ""),
+                            "albumartist": s_artist,
+                            "year": "",
+                            "genre": "",
+                            "track_number": "",
+                            "total_tracks": "",
+                            "duration_sec": None,
+                            "duration_diff": None,
+                            "artwork_url_1000": img,
+                            "confidence": score,
+                            "provider": "jiosaavn",
+                            "raw": song
+                        })
+
+                    # 2. Inspect albums if query was an album/movie
+                    for alb in data.get("albums", {}).get("data", []):
+                        a_title = alb.get("title", "")
+                        t_sim = max(string_similarity(local_title, a_title), string_similarity(q, a_title))
+                        score = round(min(100.0, t_sim * 85.0), 1)
+                        img = alb.get("image", "").replace("50x50.jpg", "500x500.jpg")
+                        candidates.append({
+                            "track_id": alb.get("id"),
+                            "title": a_title,
+                            "artist": alb.get("music", ""),
+                            "album": a_title,
+                            "albumartist": alb.get("music", ""),
+                            "year": alb.get("year", ""),
+                            "genre": "",
+                            "track_number": "",
+                            "total_tracks": "",
+                            "duration_sec": None,
+                            "duration_diff": None,
+                            "artwork_url_1000": img,
+                            "confidence": score,
+                            "provider": "jiosaavn",
+                            "raw": alb
+                        })
+                except Exception:
+                    continue
+                if candidates and max(c["confidence"] for c in candidates) >= 80.0:
+                    break
+
+        elif provider == "deezer":
+            for q in queries:
+                if not q or len(q.strip()) < 2:
+                    continue
+                try:
+                    url = f"https://api.deezer.com/search?q={urllib.parse.quote(q.strip())}"
+                    resp = requests.get(url, timeout=7)
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    for item in data.get("data", [])[:limit]:
+                        d_title = item.get("title", "")
+                        d_artist = item.get("artist", {}).get("name", "")
+                        t_sim = string_similarity(local_title, d_title)
+                        a_sim = string_similarity(local_artist, d_artist) if local_artist else 0.5
+                        dur = item.get("duration", 0)
+                        dur_diff = abs(local_duration_sec - dur) if local_duration_sec else None
+                        dur_score = 20.0 if dur_diff is not None and dur_diff <= 3.0 else 0.0
+                        score = round(min(100.0, (t_sim * 50.0) + (a_sim * 30.0) + dur_score), 1)
+                        art = item.get("album", {}).get("cover_xl") or item.get("album", {}).get("cover_big")
+                        candidates.append({
+                            "track_id": str(item.get("id")),
+                            "title": d_title,
+                            "artist": d_artist,
+                            "album": item.get("album", {}).get("title", ""),
+                            "albumartist": d_artist,
+                            "year": "",
+                            "genre": "",
+                            "track_number": "",
+                            "total_tracks": "",
+                            "duration_sec": dur,
+                            "duration_diff": dur_diff,
+                            "artwork_url_1000": art,
+                            "confidence": score,
+                            "provider": "deezer",
+                            "raw": item
+                        })
+                except Exception:
+                    continue
+                if candidates and max(c["confidence"] for c in candidates) >= 80.0:
+                    break
+
+        if candidates:
+            candidates.sort(key=lambda x: x["confidence"], reverse=True)
+            if candidates[0]["confidence"] >= min_conf:
+                return candidates
+
+    return []
+
+
 def search_itunes_candidates(
     queries: List[str],
     local_title: str,
@@ -978,56 +1227,8 @@ def search_itunes_candidates(
     local_duration_sec: Optional[float],
     limit: int = 5
 ) -> List[Dict[str, Any]]:
-    """Search iTunes API using multiple fallback queries and rank by confidence score."""
-    seen_track_ids = set()
-    ranked_candidates = []
-
-    for q in queries:
-        if not q or len(q.strip()) < 2:
-            continue
-        try:
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q.strip())}&entity=song&limit={limit}"
-            resp = requests.get(url, timeout=7)
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-            for item in data.get("results", []):
-                t_id = item.get("trackId")
-                if t_id and t_id in seen_track_ids:
-                    continue
-                seen_track_ids.add(t_id)
-
-                score = score_candidate(item, q, local_title, local_artist, local_duration_sec)
-                itunes_sec = item.get("trackTimeMillis", 0) / 1000.0
-                dur_diff = abs(local_duration_sec - itunes_sec) if local_duration_sec else None
-
-                art_100 = item.get("artworkUrl100", "")
-                art_1000 = art_100.replace("100x100bb", "1000x1000bb") if art_100 else None
-
-                ranked_candidates.append({
-                    "track_id": t_id,
-                    "title": item.get("trackName", ""),
-                    "artist": item.get("artistName", ""),
-                    "album": item.get("collectionName", ""),
-                    "albumartist": item.get("collectionArtistName") or item.get("artistName", ""),
-                    "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "",
-                    "genre": item.get("primaryGenreName", ""),
-                    "track_number": str(item.get("trackNumber", "")),
-                    "total_tracks": str(item.get("trackCount", "")),
-                    "duration_sec": itunes_sec,
-                    "duration_diff": dur_diff,
-                    "artwork_url_1000": art_1000,
-                    "confidence": score,
-                    "raw": item
-                })
-        except Exception:
-            continue
-
-        if ranked_candidates and max(c["confidence"] for c in ranked_candidates) >= 85.0:
-            break
-
-    ranked_candidates.sort(key=lambda x: x["confidence"], reverse=True)
-    return ranked_candidates
+    """Backwards-compatible wrapper that delegates to search_artwork_candidates."""
+    return search_artwork_candidates(queries, local_title, local_artist, local_duration_sec, limit=limit)
 
 
 def fetch_image_bytes(url: str) -> Optional[bytes]:
@@ -1180,11 +1381,12 @@ def cmd_auto_tag(target: str, query: Optional[str], min_confidence: float, recur
 @cli.command("fetch-art")
 @click.argument("target", type=click.Path(exists=True))
 @click.option("--query", "-q", default=None, help="Custom search term override.")
+@click.option("--provider", "-p", default=None, help="Explicit provider override: itunes, jiosaavn, deezer.")
 @click.option("--min-confidence", type=float, default=60.0, help="Minimum confidence score (0-100) to accept a match.")
 @click.option("--recursive", "-r", is_flag=True, default=False, help="Process directory recursively.")
 @click.option("--dry-run", is_flag=True, default=False, help="Preview artwork match without embedding.")
-def cmd_fetch_art(target: str, query: Optional[str], min_confidence: float, recursive: bool, dry_run: bool) -> None:
-    """Fetch and embed 1000x1000 cover art from iTunes while preserving all existing text tags."""
+def cmd_fetch_art(target: str, query: Optional[str], provider: Optional[str], min_confidence: float, recursive: bool, dry_run: bool) -> None:
+    """Fetch and embed 1000x1000 cover art using configured providers (iTunes, JioSaavn, Deezer)."""
     target_path = Path(target).resolve()
     files = [target_path] if target_path.is_file() else collect_audio_files(target_path, recursive)
 
@@ -1205,17 +1407,25 @@ def cmd_fetch_art(target: str, query: Optional[str], min_confidence: float, recu
         queries, local_title, local_artist = get_file_queries(file_path, af, query)
         local_dur = af.duration
 
-        candidates = search_itunes_candidates(queries, local_title, local_artist, local_dur)
+        candidates = search_artwork_candidates(queries, local_title, local_artist, local_dur, provider_override=provider)
         if not candidates or candidates[0]["confidence"] < min_confidence:
+            log_failure(
+                "FETCH_ART",
+                str(file_path),
+                reason=f"No match met confidence threshold ({min_confidence}%)",
+                context={"queries": queries, "local_title": local_title, "local_artist": local_artist, "top_candidate": candidates[0] if candidates else None}
+            )
             console.print(f"[yellow]▲ No high-confidence artwork match for:[/yellow] {file_path.name}")
             continue
 
         chosen = candidates[0]
         if not chosen.get("artwork_url_1000"):
+            log_failure("FETCH_ART", str(file_path), reason="Candidate has no artwork URL", context={"chosen": chosen})
             continue
 
-        diff_disp = f"(Duration diff: {chosen['duration_diff']:.1f}s)" if chosen['duration_diff'] is not None else ""
-        console.print(f"[green]✔ Matched Art ({chosen['confidence']}%):[/green] [bold]{chosen['title']}[/bold] by [cyan]{chosen['artist']}[/cyan] {diff_disp}")
+        prov_label = f"[{chosen.get('provider', 'api').upper()}]"
+        diff_disp = f"(Duration diff: {chosen['duration_diff']:.1f}s)" if chosen.get('duration_diff') is not None else ""
+        console.print(f"[green]✔ Matched Art {prov_label} ({chosen['confidence']}%):[/green] [bold]{chosen['title']}[/bold] by [cyan]{chosen['artist']}[/cyan] {diff_disp}")
 
         if dry_run:
             continue
@@ -1226,11 +1436,227 @@ def cmd_fetch_art(target: str, query: Optional[str], min_confidence: float, recu
             try:
                 af.save()
                 updated_count += 1
+                log_operation(
+                    "FETCH_ART",
+                    str(file_path),
+                    details=f"Provider: {chosen.get('provider', 'api').upper()} | Title: '{chosen['title']}' by {chosen['artist']} ({chosen['confidence']}%)",
+                    extra={"artwork_url": chosen["artwork_url_1000"], "confidence": chosen["confidence"]}
+                )
             except Exception as exc:
+                log_failure("SAVE_ART", str(file_path), reason=str(exc), exc=exc)
                 err(f"Failed to save {file_path.name}: {exc}")
+        else:
+            log_failure("FETCH_ART", str(file_path), reason=f"Failed to download image bytes from {chosen['artwork_url_1000']}")
 
     if not dry_run:
         ok(f"Successfully embedded 1000x1000 artwork into {updated_count}/{len(files)} file(s)!")
+
+
+# ---------------------------------------------------------------------------
+# Lyrics Fetching Engine (LRCLIB API)
+# ---------------------------------------------------------------------------
+
+def fetch_lyrics_lrclib(
+    title: str,
+    artist: Optional[str] = None,
+    album: Optional[str] = None,
+    duration: Optional[float] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch synchronized and plain lyrics from LRCLIB (https://lrclib.net/).
+    Uses strict get first, then falls back to search query matching.
+    """
+    cfg = load_config()
+    lyrics_cfg = cfg.get("lyrics", {})
+    lrclib_cfg = lyrics_cfg.get("providers", {}).get("lrclib", {})
+    if not lrclib_cfg.get("enabled", True):
+        return None
+    get_url = lrclib_cfg.get("get_url", "https://lrclib.net/api/get")
+    search_url = lrclib_cfg.get("search_url", "https://lrclib.net/api/search")
+
+    headers = {"User-Agent": "AntiGravity-AudioTagger/1.0 (https://github.com/)"}
+
+    # Cleaned title & artist
+    t_clean = re.sub(r'\(.*?\)|\[.*?\]', '', title).strip()
+    a_primary = None
+    if artist:
+        a_primary = re.split(r'[,;&]|\b(?:feat\.?|ft\.?|vs\.?)\b', artist, flags=re.IGNORECASE)[0].strip()
+
+    # Build combination attempts
+    attempts = [
+        {"track_name": title, "artist_name": artist, "album_name": album},
+        {"track_name": t_clean, "artist_name": a_primary, "album_name": album},
+        {"track_name": t_clean, "artist_name": artist},
+        {"track_name": title, "artist_name": a_primary},
+        {"track_name": title},
+    ]
+
+    for p in attempts:
+        req_params = {k: v for k, v in p.items() if v}
+        if duration and duration > 0:
+            req_params["duration"] = int(round(duration))
+        try:
+            resp = requests.get(get_url, params=req_params, headers=headers, timeout=6)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("plainLyrics") or data.get("syncedLyrics"):
+                    return data
+        except Exception:
+            pass
+
+    # 2. Fallback search via search_url
+    search_terms = []
+    if title and artist:
+        search_terms.append(f"{t_clean} {a_primary or artist}")
+        search_terms.append(f"{title} {artist}")
+    elif title:
+        search_terms.append(title)
+
+    for st in search_terms:
+        try:
+            resp = requests.get(search_url, params={"q": st}, headers=headers, timeout=6)
+            if resp.status_code == 200:
+                results = resp.json()
+                if isinstance(results, list) and results:
+                    best_match = None
+                    best_score = -1.0
+                    for item in results:
+                        if not item.get("plainLyrics") and not item.get("syncedLyrics"):
+                            continue
+                        item_title = item.get("trackName", "")
+                        item_artist = item.get("artistName", "")
+                        t_sim = string_similarity(title, item_title)
+                        a_sim = string_similarity(artist, item_artist) if artist else 0.5
+                        score = (t_sim * 55.0) + (a_sim * 25.0)
+                        if duration and item.get("duration"):
+                            delta = abs(duration - item["duration"])
+                            if delta <= 3.0:
+                                score += 20.0
+                            elif delta <= 8.0:
+                                score += 10.0
+                        if score > best_score and score >= 45.0:
+                            best_score = score
+                            best_match = item
+                    if best_match:
+                        return best_match
+        except Exception:
+            pass
+
+    return None
+
+
+@cli.command("lyrics")
+@click.argument("target", type=click.Path(exists=True))
+@click.option("--title", "-t", default=None, help="Explicit track title override.")
+@click.option("--artist", "-a", default=None, help="Explicit artist override.")
+@click.option("--album", default=None, help="Explicit album override.")
+@click.option("--synced/--no-synced", default=True, help="Save companion .lrc synchronized lyrics file.")
+@click.option("--embed/--no-embed", default=True, help="Embed plain lyrics into audio file tags.")
+@click.option("--force", is_flag=True, default=False, help="Overwrite existing lyrics and .lrc files.")
+@click.option("--recursive", "-r", is_flag=True, default=False, help="Process directory recursively.")
+@click.option("--dry-run", is_flag=True, default=False, help="Preview lyrics match without saving.")
+def cmd_lyrics(
+    target: str,
+    title: Optional[str],
+    artist: Optional[str],
+    album: Optional[str],
+    synced: bool,
+    embed: bool,
+    force: bool,
+    recursive: bool,
+    dry_run: bool,
+) -> None:
+    """Fetch lyrics from LRCLIB and embed plain lyrics or save companion .lrc synchronized lyrics."""
+    target_path = Path(target).resolve()
+    files = [target_path] if target_path.is_file() else collect_audio_files(target_path, recursive)
+
+    if not files:
+        warn("No supported audio files found.")
+        return
+
+    console.print(f"[bold cyan]🎤 Searching & processing lyrics for {len(files)} file(s)...[/bold cyan]")
+
+    success_count = 0
+    for file_path in files:
+        try:
+            af = AudioFile(file_path)
+        except Exception as exc:
+            warn(f"Skipping {file_path.name}: {exc}")
+            continue
+
+        lrc_path = file_path.with_suffix(".lrc")
+        has_embedded_lyrics = bool(af.get("lyrics"))
+        has_lrc = lrc_path.exists()
+
+        if not force and has_embedded_lyrics and (not synced or has_lrc):
+            console.print(f"[dim]↷ Lyrics already present for: {file_path.name} (use --force to overwrite)[/dim]")
+            continue
+
+        # Determine search parameters
+        song_title = title or af.get("title") or clean_filename_for_search(file_path.name)
+        song_artist = artist or af.get("artist") or af.get("albumartist")
+        song_album = album or af.get("album")
+        song_dur = af.duration
+
+        lyrics_data = fetch_lyrics_lrclib(song_title, song_artist, song_album, song_dur)
+        if not lyrics_data:
+            log_failure(
+                "FETCH_LYRICS",
+                str(file_path),
+                reason="No matching lyrics found on LRCLIB",
+                context={"title": song_title, "artist": song_artist, "album": song_album, "duration": song_dur}
+            )
+            console.print(f"[yellow]▲ No lyrics found for:[/yellow] {file_path.name} [dim]({song_title} - {song_artist or 'Unknown'})[/dim]")
+            continue
+
+        matched_title = lyrics_data.get("trackName") or song_title
+        matched_artist = lyrics_data.get("artistName") or song_artist or "Unknown"
+        plain = lyrics_data.get("plainLyrics")
+        synced_text = lyrics_data.get("syncedLyrics")
+
+        plain_status = f"{len(plain.splitlines())} lines" if plain else "none"
+        sync_status = "✔ synced" if synced_text else "plain only"
+
+        console.print(
+            f"[green]✔ Matched:[/green] [bold]{matched_title}[/bold] by [cyan]{matched_artist}[/cyan] "
+            f"[dim]({sync_status}, {plain_status})[/dim]"
+        )
+
+        if dry_run:
+            if plain:
+                preview = "\n".join(plain.splitlines()[:4])
+                console.print(Panel(preview + "\n...", title="Lyrics Preview", border_style="dim"))
+            continue
+
+        # Save companion .lrc if requested and available
+        if synced and synced_text:
+            try:
+                lrc_path.write_text(synced_text, encoding="utf-8")
+                log_operation("WRITE_LRC", str(lrc_path), details=f"Synced .lrc created for '{matched_title}'")
+            except Exception as exc:
+                log_failure("WRITE_LRC", str(lrc_path), reason=str(exc), exc=exc)
+                warn(f"Failed to write .lrc file for {file_path.name}: {exc}")
+
+        # Embed plain lyrics into audio file tags
+        if embed and plain:
+            af.set("lyrics", plain)
+            try:
+                af.save()
+                success_count += 1
+                log_operation(
+                    "EMBED_LYRICS",
+                    str(file_path),
+                    details=f"Embedded {len(plain.splitlines())} lines into ID3 USLT tag for '{matched_title}'",
+                    extra={"title": matched_title, "artist": matched_artist, "lines": len(plain.splitlines())}
+                )
+            except Exception as exc:
+                log_failure("EMBED_LYRICS", str(file_path), reason=str(exc), exc=exc)
+                err(f"Failed to embed lyrics in {file_path.name}: {exc}")
+        elif synced and synced_text:
+            success_count += 1
+
+    if not dry_run:
+        ok(f"Successfully processed lyrics for {success_count}/{len(files)} file(s)!")
 
 
 # ---------------------------------------------------------------------------

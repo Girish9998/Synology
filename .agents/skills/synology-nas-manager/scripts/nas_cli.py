@@ -20,8 +20,9 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 import tempfile
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import click
 from rich.console import Console
@@ -33,7 +34,38 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, Downlo
 import nas_crypto
 from nas_client import SMBClient, SFTPClient, SynologyDSMClient, WebDAVClient
 
+try:
+    from nas_logger import log_operation, log_failure, logger
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from nas_logger import log_operation, log_failure, logger
+
 console = Console()
+
+
+def find_workspace_root() -> Path:
+    """Traverse upwards to locate the workspace root containing requirements.txt, .git, or config.json."""
+    curr = Path(__file__).resolve().parent
+    for _ in range(6):
+        if (curr / "requirements.txt").exists() or (curr / ".git").exists() or (curr / "config.json").exists():
+            return curr
+        if curr.parent == curr:
+            break
+        curr = curr.parent
+    return Path.cwd()
+
+
+def load_nas_config() -> Dict[str, Any]:
+    """Load the synology section of root config.json."""
+    cfg_file = find_workspace_root() / "config.json"
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("synology", {})
+        except Exception:
+            pass
+    return {}
 
 
 @click.group()
@@ -171,8 +203,10 @@ def test_connection(profile_name, method):
                 shares = dsm.list_shares()
                 dsm.logout()
                 share_names = ", ".join([s["name"] for s in shares[:5]])
+                log_operation("NAS_TEST_DSM", prof["host"], details=f"Shares visible: {share_names or 'None'}")
                 console.print(f"[green]✔ DSM REST API:[/green] Connected successfully! Shares visible: [cyan]{share_names or 'None'}[/cyan]")
             except Exception as exc:
+                log_failure("NAS_TEST_DSM", prof["host"], reason=str(exc), exc=exc)
                 console.print(f"[red]✘ DSM REST API:[/red] Failed ({exc})")
 
     # 2. Test SFTP/SSH
@@ -183,8 +217,10 @@ def test_connection(profile_name, method):
                 sftp = SFTPClient(host=prof["host"], username=prof["username"], password=prof["password"], port=sftp_port or 22)
                 with sftp:
                     entries = sftp.list_dir(".")
+                log_operation("NAS_TEST_SFTP", f"{prof['host']}:{sftp_port or 22}", details=f"{len(entries)} items in home")
                 console.print(f"[green]✔ SFTP / SSH (Port {sftp_port or 22}):[/green] Connected successfully! ({len(entries)} items in home)")
             except Exception as exc:
+                log_failure("NAS_TEST_SFTP", f"{prof['host']}:{sftp_port or 22}", reason=str(exc), exc=exc)
                 console.print(f"[red]✘ SFTP / SSH:[/red] Failed ({exc})")
 
     # 3. Test SMB / Network Share
@@ -193,8 +229,10 @@ def test_connection(profile_name, method):
             share = prof.get("share") or "home"
             ok, msg = SMBClient.mount_drive(prof["host"], share, prof["username"], prof["password"], drive_letter=None)
             if ok:
+                log_operation("NAS_TEST_SMB", f"\\\\{prof['host']}\\{share}", details=msg)
                 console.print(f"[green]✔ SMB / CIFS:[/green] {msg}")
             else:
+                log_failure("NAS_TEST_SMB", f"\\\\{prof['host']}\\{share}", reason=msg)
                 console.print(f"[yellow]▲ SMB / CIFS:[/yellow] {msg}")
 
     # 4. Test WebDAV
@@ -203,19 +241,23 @@ def test_connection(profile_name, method):
             wd_port = prof.get("port") if prof.get("protocol") == "webdav" else None
             wd = WebDAVClient(prof["host"], prof["username"], prof["password"], port=wd_port, use_https=prof.get("use_https", False))
             if wd.test_connection():
+                log_operation("NAS_TEST_WEBDAV", f"{prof['host']}:{wd_port or (5006 if prof.get('use_https') else 5005)}", details="Endpoint responded successfully")
                 console.print(f"[green]✔ WebDAV:[/green] Endpoint responded successfully!")
             else:
+                log_failure("NAS_TEST_WEBDAV", f"{prof['host']}", reason="Service not responding or disabled")
                 console.print(f"[yellow]▲ WebDAV:[/yellow] WebDAV service not responding or not enabled on NAS.")
 
 
 @cli.command("mount")
 @click.option("--profile", "-p", "profile_name", help="Profile to mount")
 @click.option("--share", "-s", help="Shared folder name (e.g. music, home, volume1)")
-@click.option("--drive", "-d", default="*", help="Drive letter (e.g. Z: or * for next available)")
+@click.option("--drive", "-d", default=None, help="Drive letter (e.g. Z: or * for next available)")
 def mount_share(profile_name, share, drive):
     """Mount a Synology shared folder as a Windows network drive letter."""
+    cfg = load_nas_config()
     prof = nas_crypto.get_profile(profile_name)
-    target_share = share or prof.get("share")
+    target_share = share or prof.get("share") or cfg.get("default_share", "music")
+    target_drive = drive or cfg.get("default_drive", "Z:")
     if not target_share:
         console.print("[bold red]✘ Please specify a share with --share <name>[/bold red]")
         sys.exit(1)
@@ -225,23 +267,29 @@ def mount_share(profile_name, share, drive):
         share=target_share,
         username=prof["username"],
         password=prof["password"],
-        drive_letter=drive,
+        drive_letter=target_drive,
     )
     if ok:
+        log_operation("NAS_MOUNT", f"{target_drive} -> \\\\{prof['host']}\\{target_share}", details=msg)
         console.print(f"[bold green]✔[/bold green] {msg}")
         console.print(f"[dim]Tip: You can now access files directly like a local drive (e.g. using file-audio-manager scripts)![/dim]")
     else:
+        log_failure("NAS_MOUNT", f"{target_drive} -> \\\\{prof['host']}\\{target_share}", reason=msg)
         console.print(f"[bold red]✘ Mount failed:[/bold red] {msg}")
 
 
 @cli.command("unmount")
-@click.argument("target")
+@click.argument("target", required=False)
 def unmount_share(target):
     """Disconnect a mapped drive letter (e.g. Z:) or UNC path."""
-    ok, msg = SMBClient.unmount_drive(target)
+    cfg = load_nas_config()
+    target_drive = target or cfg.get("default_drive", "Z:")
+    ok, msg = SMBClient.unmount_drive(target_drive)
     if ok:
+        log_operation("NAS_UNMOUNT", target_drive, details=msg)
         console.print(f"[bold green]✔[/bold green] {msg}")
     else:
+        log_failure("NAS_UNMOUNT", target_drive, reason=msg)
         console.print(f"[bold red]✘ Failed:[/bold red] {msg}")
 
 
@@ -418,6 +466,11 @@ def delete_remote(remote_path, profile_name, force):
 @click.option("--dry-run", is_flag=True, help="Preview files to be transferred without copying")
 def sync_dirs(local_dir, remote_dir, profile_name, direction, dry_run):
     """Mirror files between a local directory and a NAS directory."""
+    import fnmatch
+
+    cfg = load_nas_config()
+    exclude_patterns = cfg.get("sync", {}).get("exclude_patterns", ["*.pamp", "AlbumArtSmall.jpg", "Thumbs.db", ".DS_Store", "desktop.ini"])
+
     prof = nas_crypto.get_profile(profile_name)
     local_path = Path(local_dir)
 
@@ -433,6 +486,8 @@ def sync_dirs(local_dir, remote_dir, profile_name, direction, dry_run):
                 target_folder = f"{remote_dir.rstrip('/')}/{rel.as_posix()}".rstrip("/")
                 sftp.mkdir(target_folder)
                 for f in files:
+                    if any(fnmatch.fnmatch(f, pat) for pat in exclude_patterns):
+                        continue
                     src_file = Path(root) / f
                     dest_file = f"{target_folder}/{f}"
                     if dry_run:
@@ -441,6 +496,7 @@ def sync_dirs(local_dir, remote_dir, profile_name, direction, dry_run):
                         sftp.upload_file(str(src_file), dest_file)
                         console.print(f"[green]Uploaded:[/green] {src_file.name}")
                     transferred += 1
+            log_operation("NAS_SYNC", f"{local_dir} -> {remote_dir}", details=f"{transferred} files processed (dry_run={dry_run})")
             console.print(f"[bold green]✔ Sync Complete:[/bold green] {transferred} files processed.")
         else:
             console.print("[yellow]Download sync can be invoked via SFTP directory walking.[/yellow]")
