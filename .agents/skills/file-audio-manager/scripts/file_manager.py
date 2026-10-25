@@ -45,6 +45,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+try:
+    from audio_logger import log_operation, log_failure
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from audio_logger import log_operation, log_failure
+
 console = Console()
 
 
@@ -281,11 +287,14 @@ def cmd_copy(src: str, dst: str, recursive: bool, overwrite: bool) -> None:
                 sys.exit(1)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+            log_operation("COPY_FILE", str(source), details=f"Copied to {destination}")
             ok(f"File copied: [bold]{source}[/bold] → [bold]{destination}[/bold]")
-    except PermissionError:
+    except PermissionError as exc:
+        log_failure("COPY_FILE", str(source), reason="Permission denied", exc=exc)
         err(f"Permission denied while copying.")
         sys.exit(1)
     except shutil.Error as exc:
+        log_failure("COPY_FILE", str(source), reason=str(exc), exc=exc)
         err(str(exc))
         sys.exit(1)
 
@@ -309,11 +318,14 @@ def cmd_move(src: str, dst: str, overwrite: bool) -> None:
             sys.exit(1)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(destination))
+        log_operation("MOVE_PATH", str(source), details=f"Moved to {destination}")
         ok(f"Moved: [bold]{source}[/bold] → [bold]{destination}[/bold]")
-    except PermissionError:
+    except PermissionError as exc:
+        log_failure("MOVE_PATH", str(source), reason="Permission denied", exc=exc)
         err("Permission denied while moving.")
         sys.exit(1)
     except shutil.Error as exc:
+        log_failure("MOVE_PATH", str(source), reason=str(exc), exc=exc)
         err(str(exc))
         sys.exit(1)
 
@@ -346,11 +358,14 @@ def cmd_delete(path: str, force: bool, recursive: bool) -> None:
                 err("Target is a directory. Use --recursive to delete directories.")
                 sys.exit(1)
             shutil.rmtree(target)
+            log_operation("DELETE_DIR", str(target), details="Deleted directory recursively")
             ok(f"Directory deleted: [bold]{target}[/bold]")
         else:
             target.unlink()
+            log_operation("DELETE_FILE", str(target), details="Deleted file")
             ok(f"File deleted: [bold]{target}[/bold]")
-    except PermissionError:
+    except PermissionError as exc:
+        log_failure("DELETE_PATH", str(target), reason="Permission denied", exc=exc)
         err(f"Permission denied: {target}")
         sys.exit(1)
 
@@ -373,11 +388,14 @@ def cmd_rename(path: str, new_name: str) -> None:
 
     try:
         target.rename(destination)
+        log_operation("RENAME_PATH", str(target), details=f"Renamed to {destination.name}")
         ok(f"Renamed: [bold]{target.name}[/bold] → [bold]{destination.name}[/bold]")
-    except PermissionError:
+    except PermissionError as exc:
+        log_failure("RENAME_PATH", str(target), reason="Permission denied", exc=exc)
         err(f"Permission denied: {target}")
         sys.exit(1)
     except OSError as exc:
+        log_failure("RENAME_PATH", str(target), reason=str(exc), exc=exc)
         err(str(exc))
         sys.exit(1)
 

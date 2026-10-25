@@ -1,0 +1,80 @@
+{
+  "logging": {
+    "enabled": true,
+    "log_dir": "logs",
+    "info_log": "info.log",
+    "error_log": "error.log",
+    "detail_log": "detail.log",
+    "audit_log": "audit.jsonl",
+    "max_bytes": 10485760,
+    "backup_count": 5
+  },
+  "synology": {
+    "default_drive": "Z:",
+    "default_share": "music",
+    "protocol_priority": [
+      "smb",
+      "sftp",
+      "rest"
+    ],
+    "connection_timeout": 15,
+    "sync": {
+      "exclude_patterns": [
+        "*.pamp",
+        "AlbumArtSmall.jpg",
+        "Thumbs.db",
+        ".DS_Store",
+        "desktop.ini"
+      ]
+    }
+  },
+  "audio": {
+    "artwork": {
+      "provider_order": [
+        "itunes",
+        "jiosaavn",
+        "deezer"
+      ],
+      "request_delay_seconds": 0.25,
+      "min_confidence": 60.0,
+      "providers": {
+        "itunes": {
+          "enabled": true,
+          "search_url": "https://itunes.apple.com/search",
+          "country": "IN",
+          "entity": "song",
+          "image_replace": [
+            "100x100bb",
+            "1000x1000bb"
+          ]
+        },
+        "jiosaavn": {
+          "enabled": true,
+          "search_url": "https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&ctx=web6dot0",
+          "image_replace": [
+            "50x50.jpg",
+            "500x500.jpg"
+          ]
+        },
+        "deezer": {
+          "enabled": true,
+          "search_url": "https://api.deezer.com/search",
+          "image_field": "album.cover_xl"
+        }
+      }
+    },
+    "lyrics": {
+      "provider_order": [
+        "lrclib"
+      ],
+      "request_delay_seconds": 0.2,
+      "providers": {
+        "lrclib": {
+          "enabled": true,
+          "get_url": "https://lrclib.net/api/get",
+          "search_url": "https://lrclib.net/api/search"
+        }
+      }
+    }
+  }
+}

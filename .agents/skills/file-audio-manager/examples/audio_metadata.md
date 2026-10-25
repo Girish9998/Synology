@@ -214,6 +214,30 @@ python scripts/audio_metadata.py artwork track.flac --embed /images/cover.png
 
 ---
 
+## Fetch and Embed Lyrics (LRCLIB)
+
+```bash
+# Fetch and embed plain lyrics + save companion .lrc synchronized file
+python scripts/audio_metadata.py lyrics "C:/music/Barso Re.mp3"
+
+# Preview lyrics matches without writing to file (dry run)
+python scripts/audio_metadata.py lyrics "C:/music/English/21 Guns.mp3" --dry-run
+
+# Batch process an entire album/directory
+python scripts/audio_metadata.py lyrics "C:/music/A.R. Rahman Hits" --recursive
+
+# Force overwrite existing lyrics and .lrc companion files
+python scripts/audio_metadata.py lyrics "C:/music/song.mp3" --force
+
+# Explicitly override track title or artist for hard-to-find tracks
+python scripts/audio_metadata.py lyrics "C:/music/track.mp3" --title "Chaiyya Chaiyya" --artist "Sukhwinder Singh"
+
+# Embed plain lyrics only (skip creating companion .lrc file)
+python scripts/audio_metadata.py lyrics "C:/music/track.mp3" --no-synced
+```
+
+---
+
 ## Common Workflow: Tag a New Album
 
 ```bash

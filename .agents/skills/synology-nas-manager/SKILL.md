@@ -96,6 +96,22 @@ python .agents/skills/synology-nas-manager/scripts/nas_cli.py sync ./data /volum
 
 ---
 
+## Centralized Configuration & Enterprise Logging
+
+This skill reads default settings from the workspace root [config.json](file:///C:/Users/giris/OneDrive/Desktop/Temp_All/Code/AntiGravityyy/Synology/config.json) under `"synology"`:
+- **Default Network Drive**: e.g., `"Z:"`
+- **Default Shared Folder**: e.g., `"music"`
+- **Connection Timeout**: e.g., `15` seconds
+- **Sync Exclusions**: Patterns ignored during directory sync (e.g., `*.pamp`, `Thumbs.db`, `.DS_Store`, `desktop.ini`).
+
+All operations, connectivity tests, and failures are emitted to the enterprise multi-tier logging pipeline in `logs/`:
+- `logs/info.log`: Operational milestones, successful mounts, unmounts, and sync stats.
+- `logs/error.log`: Connection timeouts, authentication failures, and mount errors.
+- `logs/detail.log`: Protocol diagnostics, session IDs, and exception stack traces.
+- `logs/audit.jsonl`: Immutable JSON Lines audit stream with UTC timestamps and correlation IDs.
+
+---
+
 ## Detailed References
 
 - [Usage Examples & Guides](./examples/nas_usage.md)

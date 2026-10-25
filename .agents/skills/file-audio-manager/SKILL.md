@@ -6,7 +6,7 @@ description: >-
   (MP3, FLAC, AAC, M4A, OGG, WAV), or organize music libraries following standard
   patterns (unified compilation albums, 1000x1000 individual movie/single covers,
   clean filenames, clearing track numbers on loose tracks for alphabetical sorting,
-  and subfolder soundtrack tagging).
+  multilingual Telugu vs Tamil dub language integrity, watermark scrubbing, and subfolder soundtrack tagging).
 ---
 
 # File & Audio Manager Skill
@@ -130,7 +130,8 @@ python scripts/audio_metadata.py <command> [options]
 | `import`      | Import metadata from JSON or CSV and apply to files           |
 | `artwork`     | Extract or embed cover art (`--extract` / `--embed`)          |
 | `auto-tag`    | Look up & apply official iTunes metadata & 1000x1000 artwork  |
-| `fetch-art`   | Fetch & embed 1000x1000 iTunes cover art (preserves text tags)|
+| `fetch-art`   | Fetch & embed 1000x1000 art (iTunes, JioSaavn, Deezer via config)|
+| `lyrics`      | Fetch lyrics via LRCLIB: embed plain lyrics & save .lrc synced|
 
 ### Agent Instructions
 
@@ -156,9 +157,43 @@ python scripts/audio_metadata.py <command> [options]
 
 10. **Auto-tagging & High-Res Cover Art**:
    - `auto-tag <file_or_dir>`: Queries iTunes API, cleans noise, verifies duration within ±2-3 seconds, and updates tags + embeds 1000x1000 artwork.
-   - `fetch-art <file_or_dir>`: Same precision duration matching, but only downloads and embeds 1000x1000 cover art without altering existing text tags. Use `--dry-run` to preview matches first.
+   - `fetch-art <file_or_dir>`: Multi-provider artwork engine driven by [config.json](resources/config.json). Queries providers in order (`itunes` -> `jiosaavn` -> `deezer`) and automatically falls back if rate-limited (HTTP 403/429) or missing.
+   - Use `--provider / -p` (`itunes`, `jiosaavn`, `deezer`) to override order for specific libraries. Use `--dry-run` to preview matches.
+
+11. **Lyrics Fetching & Synchronized LRC**:
+   - `lyrics <file_or_dir>`: Fetches plain and synchronized lyrics from the LRCLIB open API (`https://lrclib.net/`).
+   - Automatically embeds unsynchronized plain lyrics into ID3 `USLT` / Vorbis / MP4 tags.
+   - Automatically writes companion `.lrc` synchronized lyrics files alongside each audio file (ideal for players that support karaoke-style scrolling lyrics).
+   - Use `--no-synced` to skip `.lrc` file creation, `--no-embed` to skip tag embedding, `--dry-run` to preview, and `--force` to overwrite existing lyrics.
 
 **Error handling**: Unsupported formats produce a clear error with the list of supported extensions. Missing files and permission errors are handled gracefully. When writing tags, original file is preserved if an error occurs.
+
+---
+
+## 3. Enterprise SDLC Logging & Audit System
+
+All operations across `audio_metadata.py` and `file_manager.py` are continuously recorded into standard log tiers in the `logs/` directory (configured via `resources/config.json`):
+
+| Log File | Level | Purpose & SDLC Pattern |
+| :--- | :--- | :--- |
+| **`logs/info.log`** | `INFO`+ | High-level operational milestones, tag writes, artwork embeddings, and session IDs (`sid`). |
+| **`logs/error.log`** | `WARNING`+ | Dedicated failure/anomaly stream capturing only warnings, errors, and unhandled exceptions. |
+| **`logs/detail.log`** | `DEBUG`+ | Deep diagnostic telemetry: API search payloads, duration deltas, similarity scores, and stack traces. |
+| **`logs/audit.jsonl`** | Structured | Immutable JSON Lines event trail (timestamp, session_id, action, target, status, diff payload). |
+
+```json
+// Example audit.jsonl record
+{
+  "timestamp": "2026-10-23T23:49:04.506Z",
+  "session_id": "fe7ba2e0",
+  "event_type": "OPERATION",
+  "action": "WRITE_TAGS",
+  "target": "C:\\Users\\giris\\OneDrive\\Music\\English\\21 Guns.mp3",
+  "status": "SUCCESS",
+  "details": "Fields: genre",
+  "extra": { "genre": "Alternative Rock" }
+}
+```
 
 ---
 
@@ -220,6 +255,49 @@ Always follow this exact workflow when organizing any artist or compilation musi
    - Fetch and embed **1000×1000 individual movie/single artwork** for each song.
    - Write movie/release info to comment: `Movie: <CollectionName> | Released: <Date> | Genre: <Genre> | Composer: <Artist>`.
    - Rename files to clean `{Title}.mp3` (or `{Title} ({Movie}).mp3`).
+
+3. **Multilingual & Telugu Dub Language Integrity**:
+   - **Identical Duration Trap**: For bilingual/dubbed Indian cinema soundtracks (especially A.R. Rahman, Harris Jayaraj, Yuvan Shankar Raja, Shankar, Mani Ratnam), the instrumental master audio has the **exact same track length** in both Telugu and Tamil. Streaming services (Apple Music / iTunes) list Tamil as the primary release, which causes automated duration matchers to incorrectly rename Telugu songs into Tamil and attach Tamil posters.
+   - **Mandatory Language Rules**:
+     1. **Preserve Audio Vocals & Titles**: Never rename Telugu songs into Tamil (e.g., keep `Kannanule` NOT `Kannalane`; `Adi Arabi Kadalandam` NOT `Andha Arabi Kadaloram`; `Adharanee` NOT `Athiradee`; `Pachchadanamey` NOT `Pachai Nirame`; `Chinni Chinni Aasa` NOT `Chinna Chinna Asai`; `Mukkala Mukabula` NOT `Mukkala Mukkabla (Tamil)`).
+     2. **Language-Specific Artwork**: If the audio vocals and lyrics are in Telugu, the embedded artwork MUST be the official **Telugu movie release poster** (e.g., *Sakhi*, *Nuvvu Nenu Prema*, *Yuva*, *Oke Okkadu*, *Sivaji: The Boss*, *Prema Desam*, *Iddaru*, *Merupu Kalalu*, *Gentleman*, *I - Manoharudu*, *Roja Telugu*), NOT the Tamil equivalent.
+     3. **Explicit API Search Queries**: When fetching artwork or metadata for bilingual composers, always append `Telugu` or the specific Telugu film title (e.g. `"Sakhi Telugu"`, `"Nuvvu Nenu Prema"`, `"Sivaji The Boss"`, `"Oke Okkadu"`) to force the API to select the Telugu release.
+     4. **Preserve Native Tamil/Hindi**: If a song actually has native Tamil lyrics (e.g. `Nee Singam Dhan`) or Hindi lyrics (e.g. `Challa`, `Dil Se Re`, `Khwaja Mere Khwaja`), preserve its respective language, title, and artwork.
+
+   **Telugu $\leftrightarrow$ Tamil Bilingual Film Reference**:
+   | Telugu Release | Tamil Equivalent | Key Telugu Song Titles |
+   | :--- | :--- | :--- |
+   | **Bombay (Telugu)** | *Bombay* | `Kannanule`, `Adi Arabi Kadalandam`, `Urike Chilaka` |
+   | **Sakhi** | *Alaipayuthey* | `Pachchadanamey`, `Snehithuda` |
+   | **Nuvvu Nenu Prema** | *Sillunu Oru Kaadhal* | `New York Nagaram`, `Preminche Premava` |
+   | **Yuva** | *Aayutha Ezhuthu* | `Deham Thiri`, `Dol Dol`, `Jana Gana Mana`, `Sankurathri Kodi` |
+   | **Oke Okkadu** | *Mudhalvan* | `Nelluri Nerajana`, `Shakalaka Baby`, `Utti Meeda Koodu` |
+   | **Sivaji: The Boss** | *Sivaji* | `Adharanee`, `Vaaji Vaaji`, `Balleilakka`, `Sahana`, `Style` |
+   | **Prema Desam** | *Kadhal Desam* | `Mustafa Mustafa`, `Hello Doctor`, `College Style`, `Prema Prema` |
+   | **Iddaru** | *Iruvar* | `Kallaganthalu Kattadhoi` |
+   | **Merupu Kalalu** | *Minsara Kanavu* | `Vennelave Vennelave` |
+   | **Gentleman (Telugu)** | *Gentleman* | `Chikubuk Raile`, `Mudinepalli` |
+   | **I - Manoharudu** | *I* | `Nuvvunte Naa Jathagaa`, `Poolane Kunukeyamantaa` |
+   | **Roja (Telugu)** | *Roja* | `Chinni Chinni Aasa`, `Na Cheli Rojave`, `Nagamani Nagamani` |
+   | **Premikudu** | *Kadhalan* | `Mukkala Mukabula`, `Urvashi Urvashi`, `Andhamaina Premarani` |
+   | **Ye Maaya Chesave** | *Vinnaithaandi Varuvaayaa* | `Ee Hridayam`, `Aakaasam` |
+   | **OK Bangaram** | *O Kadhal Kanmani* | `Aye Amaayika`, `Mental Madhilo`, `Maula Wa Sallim` |
+   | **Priyuralu Pilichindi** | *Kandukondain Kandukondain* | `Palike Gorinka`, `Yemi Cheyamanduve` |
+
+4. **Watermark & Piracy Metadata Scrubbing**:
+   - Always strip unauthorized piracy tags, website spam, and encoder advertisements inserted by third-party download sites (`DownloadMing`, `DoReGaMa`, `AtoZmp3`, `StarMusiQ`, `DJMaza`, `MP3Khan`, `Songs.PK`, `MusicLinda`):
+     - **Remove Frames**: `TENC` (Encoded By), `TCOP` (Copyright), `TSSE` (Encoder Settings), `TEXT` (Lyricist spam), `TOFN` (Original filename watermark), `TRSN` / `TRSO` (Radio URLs), and all `WXXX` / `W...` web link frames.
+     - **Scrub Comments (`COMM`) & Composer (`TCOM`)**: Strip trailing website domains (`.com`, `.net`, `.se`, `.in`, `.mobi`) from composer and comment fields.
+
+
+---
+
+## Centralized Configuration & Enterprise Logging
+
+This skill reads configuration settings from the workspace root [config.json](file:///C:/Users/giris/OneDrive/Desktop/Temp_All/Code/AntiGravityyy/Synology/config.json) under `"audio"`:
+- **Artwork Providers**: Cascading fallback order (`itunes` $\rightarrow$ `jiosaavn` $\rightarrow$ `deezer`), API endpoint templates, image upscaling rules (`1000x1000bb`, `500x500`), and rate-limit request throttling.
+- **Lyrics Providers**: LRCLIB endpoint configurations (`/api/get`, `/api/search`).
+- **Logging Pipeline**: All operations, tag writes, artwork embeddings, and error diagnostics are emitted to `logs/` (`info.log`, `error.log`, `detail.log`, `audit.jsonl`).
 
 ---
 
