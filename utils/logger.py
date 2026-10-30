@@ -1,8 +1,8 @@
 """
-audio_logger.py — Enterprise SDLC-compliant multi-tier logging & audit framework.
+utils/logger.py — Centralized Enterprise SDLC-compliant multi-tier logging & audit framework.
 
 Architecture:
-  - logs/info.log    : Operational milestones, batch completions (INFO)
+  - logs/info.log    : Operational milestones, batch completions, sync events (INFO)
   - logs/error.log   : Isolated anomalies, warnings, and failures (WARNING/ERROR/CRITICAL)
   - logs/detail.log  : Deep diagnostics, candidate scoring, API payloads, tracebacks (DEBUG)
   - logs/audit.jsonl : Structured immutable event stream for compliance & analytics (JSON Lines)
@@ -19,14 +19,14 @@ import traceback
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def find_workspace_root() -> Path:
-    """Traverse upwards to locate the workspace root containing requirements.txt or .git."""
+    """Traverse upwards to locate the workspace root containing requirements.txt, .git, or config.json."""
     curr = Path(__file__).resolve().parent
     for _ in range(6):
-        if (curr / "requirements.txt").exists() or (curr / ".git").exists():
+        if (curr / "requirements.txt").exists() or (curr / ".git").exists() or (curr / "config.json").exists():
             return curr
         if curr.parent == curr:
             break
@@ -61,7 +61,7 @@ SESSION_ID: str = uuid.uuid4().hex[:8]
 
 
 class ContextFilter(logging.Filter):
-    """Injects session correlation ID and ISO timestamp into every log record."""
+    """Injects session correlation ID into every log record."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.session_id = SESSION_ID  # type: ignore[attr-defined]
@@ -74,11 +74,19 @@ if _enabled:
     except Exception:
         pass
 
-# Root logger
-logger = logging.getLogger("audio_toolkit")
-logger.setLevel(logging.DEBUG)
+_shared_handlers: Optional[List[logging.Handler]] = None
 
-if _enabled and not logger.handlers and _log_dir.exists():
+
+def _init_shared_handlers() -> List[logging.Handler]:
+    global _shared_handlers
+    if _shared_handlers is not None:
+        return _shared_handlers
+
+    handlers: List[logging.Handler] = []
+    if not _enabled or not _log_dir.exists():
+        _shared_handlers = handlers
+        return handlers
+
     ctx_filter = ContextFilter()
 
     # 1. Operational Info Log (INFO and above)
@@ -87,11 +95,11 @@ if _enabled and not logger.handlers and _log_dir.exists():
     h_info.setLevel(logging.INFO)
     fmt_info = logging.Formatter(
         "[%(asctime)s] [%(levelname)-7s] [sid:%(session_id)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     h_info.setFormatter(fmt_info)
     h_info.addFilter(ctx_filter)
-    logger.addHandler(h_info)
+    handlers.append(h_info)
 
     # 2. Dedicated Error & Warning Log (WARNING and ERROR only)
     error_path = _log_dir / _error_file
@@ -99,11 +107,11 @@ if _enabled and not logger.handlers and _log_dir.exists():
     h_error.setLevel(logging.WARNING)
     fmt_error = logging.Formatter(
         "[%(asctime)s] [%(levelname)-7s] [sid:%(session_id)s] [%(filename)s:%(lineno)d] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     h_error.setFormatter(fmt_error)
     h_error.addFilter(ctx_filter)
-    logger.addHandler(h_error)
+    handlers.append(h_error)
 
     # 3. Comprehensive Technical Detail Log (DEBUG and above, tracebacks, raw payloads)
     detail_path = _log_dir / _detail_file
@@ -111,11 +119,30 @@ if _enabled and not logger.handlers and _log_dir.exists():
     h_detail.setLevel(logging.DEBUG)
     fmt_detail = logging.Formatter(
         "[%(asctime)s] [%(levelname)-7s] [sid:%(session_id)s] [%(name)s:%(filename)s:%(lineno)d] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     h_detail.setFormatter(fmt_detail)
     h_detail.addFilter(ctx_filter)
-    logger.addHandler(h_detail)
+    handlers.append(h_detail)
+
+    _shared_handlers = handlers
+    return _shared_handlers
+
+
+def get_logger(name: str = "synology_workspace") -> logging.Logger:
+    """Get or configure a logger with standard shared rotating file handlers."""
+    log = logging.getLogger(name)
+    log.setLevel(logging.DEBUG)
+
+    if _enabled and not log.handlers:
+        for handler in _init_shared_handlers():
+            log.addHandler(handler)
+
+    return log
+
+
+# Default workspace logger instance
+logger = get_logger("synology_workspace")
 
 
 def append_audit_event(event: Dict[str, Any]) -> None:
@@ -126,7 +153,7 @@ def append_audit_event(event: Dict[str, Any]) -> None:
     record = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "session_id": SESSION_ID,
-        **event
+        **event,
     }
     try:
         with open(audit_path, "a", encoding="utf-8") as f:
@@ -141,22 +168,25 @@ def log_operation(
     details: Optional[str] = None,
     status: str = "SUCCESS",
     extra: Optional[Dict[str, Any]] = None,
+    logger_instance: Optional[logging.Logger] = None,
 ) -> None:
     """Standardized high-level operation logger."""
     if not _enabled:
         return
+
+    active_logger = logger_instance or logger
 
     msg = f"[{action}] [{status}] {target}"
     if details:
         msg += f" — {details}"
 
     if status.upper() in ("FAIL", "FAILURE", "ERROR"):
-        logger.warning(msg)
+        active_logger.warning(msg)
     else:
-        logger.info(msg)
+        active_logger.info(msg)
 
     # Record in detail log
-    logger.debug(f"[OP_TRACE] {action} | target='{target}' | status={status} | extra={json.dumps(extra, default=str)}")
+    active_logger.debug(f"[OP_TRACE] {action} | target='{target}' | status={status} | extra={json.dumps(extra, default=str)}")
 
     # Record in structured audit trail
     append_audit_event({
@@ -165,7 +195,7 @@ def log_operation(
         "target": target,
         "status": status,
         "details": details,
-        "extra": extra or {}
+        "extra": extra or {},
     })
 
 
@@ -175,6 +205,7 @@ def log_failure(
     reason: str,
     exc: Optional[Exception] = None,
     context: Optional[Dict[str, Any]] = None,
+    logger_instance: Optional[logging.Logger] = None,
 ) -> None:
     """
     Standardized failure & anomaly logger.
@@ -183,13 +214,15 @@ def log_failure(
     if not _enabled:
         return
 
+    active_logger = logger_instance or logger
+
     # 1. Summary line for info.log and error.log
     err_msg = f"[{action}] [FAILED] {target} — Reason: {reason}"
-    logger.error(err_msg)
+    active_logger.error(err_msg)
 
     # 2. Granular breakdown for detail.log
     detail_lines = [
-        f"=== [FAILURE ANOMALY] ===",
+        "=== [FAILURE ANOMALY] ===",
         f"Session ID: {SESSION_ID}",
         f"Action:     {action}",
         f"Target:     {target}",
@@ -203,7 +236,7 @@ def log_failure(
         detail_lines.append(traceback.format_exc())
     detail_lines.append("=" * 25)
 
-    logger.debug("\n".join(detail_lines))
+    active_logger.debug("\n".join(detail_lines))
 
     # 3. Structured audit event
     append_audit_event({
@@ -213,5 +246,5 @@ def log_failure(
         "status": "FAILED",
         "reason": reason,
         "exception_type": type(exc).__name__ if exc else None,
-        "context": context or {}
+        "context": context or {},
     })

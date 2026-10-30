@@ -50,11 +50,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-try:
-    from audio_logger import log_operation, log_failure, logger
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from audio_logger import log_operation, log_failure, logger
+_root = Path(__file__).resolve().parents[4]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+from utils.logger import get_logger, log_failure, log_operation
+logger = get_logger("audio_toolkit")
 
 # ---------------------------------------------------------------------------
 # Mutagen imports

@@ -13,3 +13,4 @@
 ---
 
 ## Logged Ideas
+- [2026-10-29 23:28] Web App since.. iphone can't have a free app..
