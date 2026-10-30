@@ -3,8 +3,14 @@
   "tasks": [
     {
       "label": "Log Idea",
-      "type": "shell",
-      "command": "python scripts/quick_log.py --type idea \"${input:ideaText}\"",
+      "type": "process",
+      "command": "python",
+      "args": [
+        "scripts/quick_log.py",
+        "--type",
+        "idea",
+        "${input:ideaText}"
+      ],
       "presentation": {
         "reveal": "silent",
         "close": true
@@ -13,8 +19,14 @@
     },
     {
       "label": "Log Fix",
-      "type": "shell",
-      "command": "python scripts/quick_log.py --type fix \"${input:fixText}\"",
+      "type": "process",
+      "command": "python",
+      "args": [
+        "scripts/quick_log.py",
+        "--type",
+        "fix",
+        "${input:fixText}"
+      ],
       "presentation": {
         "reveal": "silent",
         "close": true
