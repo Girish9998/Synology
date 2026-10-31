@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Downloader</title>
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <div class="container">
+        <h1>🎧 Audio Downloader</h1>
+        <p class="subtitle">Convert and download high-quality MP3 tracks from your favorite links</p>
+        
+        <form id="downloadForm">
+            <div class="input-group">
+                <label for="url">Video URL</label>
+                <input type="url" id="url" name="url" placeholder="https://youtube.com/..." required />
+            </div>
+
+            <div class="time-container">
+                <div class="input-group">
+                    <label for="start_time">Start Time</label>
+                    <input type="number" id="start_time" name="start_time" min="0" placeholder="Sec (Optional)" />
+                </div>
+
+                <div class="input-group">
+                    <label for="end_time">End Time</label>
+                    <input type="number" id="end_time" name="end_time" min="0" placeholder="Sec (Optional)" />
+                </div>
+            </div>
+
+            <button type="submit">Get MP3 Audio</button>
+        </form>
+        <div id="status" class="status"></div>
+        <div id="progressWrapper" class="progress-wrapper" style="display: none;">
+            <div class="progress-bar-container">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div id="progressStage" class="progress-stage">Preparing...</div>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

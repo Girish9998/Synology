@@ -8,8 +8,10 @@ from utils.logger import (
     append_audit_event,
     find_workspace_root,
     get_logger,
+    get_trace_id,
     log_failure,
     log_operation,
+    set_trace_id,
 )
 
 __all__ = [
@@ -18,6 +20,8 @@ __all__ = [
     "append_audit_event",
     "find_workspace_root",
     "get_logger",
+    "get_trace_id",
     "log_failure",
     "log_operation",
+    "set_trace_id",
 ]
