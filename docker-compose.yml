@@ -1,0 +1,19 @@
+services:
+  audio-downloader:
+    build: .
+    container_name: audio-downloader
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount Synology NAS music Downloads folder directly
+      - /volume1/music/Downloads:/nas_downloads
+      # Persist application logs on host
+      - ./logs:/app/logs
+    environment:
+      - NAS_DOWNLOAD_PATH=/nas_downloads
+      - NAS_SHARE=music
+      - LOG_LEVEL=INFO
+      - LOG_DIR=/app/logs
+    env_file:
+      - .env

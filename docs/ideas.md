@@ -13,8 +13,11 @@
     - Responds in Telegram with the clean-titled MP3 and confirmation caption showing NAS archive location.
     - Automatically cleans up local temporary staging files while keeping the NAS copy intact.
   - **Web Application Ingestion ([`apps/audio_downloader/backend/app.py`](../apps/audio_downloader/backend/app.py) & [`apps/audio_downloader/frontend/`](../apps/audio_downloader/frontend/))**:
-    - Serves mobile/desktop web portal on port 8000.
-    - Downloads audio, archives a copy to NAS `Downloads/`, and streams the file back to the browser.
+    - Serves mobile/desktop web portal on port 8000 (accessible on local network via `http://192.168.86.27:8000`).
+    - Streams MP3 download to phone/client immediately while simultaneously archiving a copy to Synology NAS `Downloads/` via non-blocking `BackgroundTasks`.
+  - **Docker & NAS Container Hosting ([`Dockerfile`](../Dockerfile) & [`docker-compose.yml`](../docker-compose.yml))**:
+    - Containerized with embedded `ffmpeg` and volume mount directly into `/volume1/music/Downloads`.
+    - Auto-restarts on NAS reboot via Synology Container Manager.
   - **Dedicated Sub-App & SDLC Logging Architecture**:
     - Created dedicated sub-app logger ([`apps/audio_downloader/backend/logger.py`](../apps/audio_downloader/backend/logger.py)) that feeds real-time formatted stdout to console/terminal, writes to dedicated application logs (`logs/backend.log`, `logs/frontend.log`), and propagates to the centralized repository logger ([`utils/logger.py`](../utils/logger.py): `info.log`, `error.log`, `detail.log`, `audit.jsonl`).
   - **Configuration Integration**:
