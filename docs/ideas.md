@@ -43,9 +43,24 @@
   - **Instant Delivery**: Telegram bot and Web API can deliver the existing file in milliseconds with caption: `⚡ Retrieved from NAS library (already exists)`.
   - **Storage & Bandwidth Savings**: Prevents duplicate tracks (`Song (1).mp3`), avoids repeated YouTube bandwidth usage, and eliminates external rate-limiting triggers.
 
+### 3. Remote Outside-Home Access for Web Application
+- **Question / Goal**: How to securely access the Audio Downloader Web Portal (port 8000) from an iPhone / browser outside home Wi-Fi (like DS Audio works via QuickConnect).
+- **Options to Evaluate**:
+  - **Approach A: Tailscale Mesh VPN (Recommended)**:
+    - Zero port-forwarding required. WireGuard encryption.
+    - Native Synology DSM package + iOS App.
+    - Accessible globally at `http://100.x.y.z:8000`.
+  - **Approach B: Synology Reverse Proxy + DDNS (`*.synology.me`)**:
+    - Free Let's Encrypt SSL certificate managed automatically by DSM.
+    - Direct subdomain URL: `https://music.yourname.synology.me` mapped to `http://localhost:8000`.
+    - Requires forwarding port 443 (HTTPS) on home Wi-Fi router.
+  - **Approach C: Telegram Bot as the Out-of-Home Interface**:
+    - Zero configuration needed (already working anywhere via Telegram's cloud relay).
+
 ---
 
 ## Logged Ideas
 - [2026-10-29 23:28] Web App since.. iphone can't have a free app..
 - [2026-10-29 23:47] Merge download code and keep add it here.. so that agent can download and save to the location which nas has access to (Implemented 2026-10-31)
 - [2026-10-31 17:52] Add download cache to check if song already exists in NAS storage / library and return existing file instead of re-downloading
+- [2026-10-31 17:54] Remote outside-home access for Audio Downloader Web UI (Tailscale mesh VPN vs Synology DDNS reverse proxy with Let's Encrypt)
