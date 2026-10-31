@@ -379,9 +379,11 @@ def download_with_ytdlp(query: str, output_dir: str, start_time: int = None, end
     if start_time is not None or end_time is not None:
         logger.debug("Download time range: start=%s, end=%s", start_time, end_time)
 
+    is_search = str(query).startswith('ytsearch')
     ydl_opts = {
         'format': 'bestaudio/best',
-        'ignoreerrors': True,
+        'noplaylist': not is_search,
+        'ignoreerrors': False if is_search else True,
         'writethumbnail': True,
         'match_filter': duration_filter,
         'postprocessors': [
@@ -432,7 +434,11 @@ def download_with_ytdlp(query: str, output_dir: str, start_time: int = None, end
                 raise ValueError("No video information retrieved.")
 
             if 'entries' in info:
-                info = info['entries'][0]
+                entries = [e for e in (info.get('entries') or []) if e]
+                if entries:
+                    info = entries[0]
+                else:
+                    raise ValueError(f"No search results returned for query: {query}")
 
             if not info or (not info.get('requested_downloads') and not ydl.prepare_filename(info)):
                 raise ValueError("Download skipped. Ensure video is not a livestream.")
@@ -477,10 +483,14 @@ def download_audio_to_mp3(url: str, output_dir: str = DEFAULT_DOWNLOAD_DIR, star
             search_query = clean_title
 
     else:
+        # Strip playlist, mix, radio, and mobile tracking params (?is=, ?si=, &list=)
+        if "watch?v=" in url or "youtu.be/" in url:
+            url = re.sub(r'([?&](list|start_radio|index|is|si)=[^&]+)', '', url)
+
         # Smart Match for YouTube / generic URLs
-        logger.info("Analyzing URL for smart matching...")
+        logger.info("Analyzing URL for smart matching: %s", url)
         try:
-            ydl_opts_meta = {'quiet': True, 'no_warnings': True}
+            ydl_opts_meta = {'quiet': True, 'no_warnings': True, 'noplaylist': True}
             if os.path.exists(COOKIES_FILE):
                 ydl_opts_meta['cookiefile'] = COOKIES_FILE
             else:
@@ -513,11 +523,15 @@ def download_audio_to_mp3(url: str, output_dir: str = DEFAULT_DOWNLOAD_DIR, star
         except Exception as e:
             logger.warning("Smart match lookup error, proceeding with direct download: %s", e)
 
-    # Execute Download
+    # Execute Download with resilient fallback
     try:
         if search_query:
             yt_search = f"ytsearch1:{search_query} official audio"
-            filepath = download_with_ytdlp(yt_search, output_dir, start_time, end_time)
+            try:
+                filepath = download_with_ytdlp(yt_search, output_dir, start_time, end_time)
+            except Exception as search_err:
+                logger.warning("Smart search failed (%s). Falling back to direct URL: %s", search_err, url)
+                filepath = download_with_ytdlp(url, output_dir, start_time, end_time)
         else:
             filepath = download_with_ytdlp(url, output_dir, start_time, end_time)
     except Exception as ytdlp_err:

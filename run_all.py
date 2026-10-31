@@ -44,8 +44,13 @@ try:
             if poll_result is not None:
                 logger.warning("Process %s exited with code %s", p.args, poll_result)
                 if "bot.py" in str(p.args):
-                    logger.warning("⚠️ Telegram bot exited. Continuing with the FastAPI web app...")
+                    logger.warning("Telegram bot exited. Restarting bot supervisor in 3 seconds...")
                     processes.remove(p)
+                    time.sleep(3)
+                    new_bot = subprocess.Popen([
+                        sys.executable, "apps/audio_downloader/backend/bot.py"
+                    ])
+                    processes.append(new_bot)
                 else:
                     # If FastAPI exits, terminate everything and exit
                     for other in processes:

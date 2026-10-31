@@ -9,7 +9,7 @@ from utils.logger import get_logger
 
 logger = get_logger("audio_downloader.cobalt")
 
-COBALT_API_URL = "https://api.cobalt.tools/api/json"
+COBALT_API_URL = os.environ.get("COBALT_API_URL", "https://api.cobalt.tools/")
 
 def download_via_cobalt(url: str, output_dir: str, start_time: int = None, end_time: int = None) -> str:
     """

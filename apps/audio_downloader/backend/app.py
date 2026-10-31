@@ -155,6 +155,20 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
         logger.exception("An error occurred during audio download processing:")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/system/restart")
+def restart_system():
+    logger.info("Received system restart request. Sending SIGTERM to PID 1...")
+    import threading, signal
+    def _do_exit():
+        time.sleep(0.5)
+        try:
+            os.kill(1, signal.SIGTERM)
+        except Exception as e:
+            logger.error("Failed to kill PID 1: %s", e)
+            os._exit(0)
+    threading.Thread(target=_do_exit).start()
+    return {"status": "restarting", "message": "Docker container PID 1 signaled to restart."}
+
 @app.get("/health")
 def health():
     nas_dir = get_nas_download_dir()
