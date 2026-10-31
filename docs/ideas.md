@@ -35,8 +35,17 @@
   - Caching query responses locally to avoid redundant round-trips.
   - Intelligent batching and preemptive provider switching.
 
+### 2. Audio Storage & Library Deduplication Cache
+- **Question / Goal**: Before initiating a full download, check if the song already exists in local storage / NAS music library and return the cached track instead of re-downloading.
+- **Design & Considerations**:
+  - **URL / Video ID Cache**: Maintain an SQLite or JSON lookup index mapping `youtube_video_id` / `spotify_id` to existing archived file paths on the NAS.
+  - **Fuzzy Metadata Matching**: When smart metadata extracts `Title` and `Artist`, scan `music/` and `music/Downloads/` for existing MP3 files with matching ID3 tags.
+  - **Instant Delivery**: Telegram bot and Web API can deliver the existing file in milliseconds with caption: `⚡ Retrieved from NAS library (already exists)`.
+  - **Storage & Bandwidth Savings**: Prevents duplicate tracks (`Song (1).mp3`), avoids repeated YouTube bandwidth usage, and eliminates external rate-limiting triggers.
+
 ---
 
 ## Logged Ideas
 - [2026-10-29 23:28] Web App since.. iphone can't have a free app..
 - [2026-10-29 23:47] Merge download code and keep add it here.. so that agent can download and save to the location which nas has access to (Implemented 2026-10-31)
+- [2026-10-31 17:52] Add download cache to check if song already exists in NAS storage / library and return existing file instead of re-downloading
