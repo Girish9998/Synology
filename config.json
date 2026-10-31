@@ -85,6 +85,6 @@
     "target_folder": "Downloads",
     "save_to_nas": true,
     "ffmpeg_path": "C:\\Users\\giris\\AppData\\Local\\ffmpegio\\ffmpeg-downloader\\ffmpeg\\bin",
-    "cobalt_api_url": "https://api.cobalt.tools/api/json"
+    "cobalt_api_url": "https://api.cobalt.tools/"
   }
 }

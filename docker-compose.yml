@@ -6,6 +6,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      # Live-mount project directory so code changes apply immediately
+      - .:/app
       # Mount Synology NAS music Downloads folder directly
       - /volume1/music/Downloads:/nas_downloads
       # Persist application logs on host
