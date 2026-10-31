@@ -12,3 +12,6 @@ Thumbs.db
 .venv/
 venv/
 
+apps/audio_downloader/backend/downloads/
+apps/backend/downloads/
+cookies.txt
