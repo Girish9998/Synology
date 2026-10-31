@@ -40,8 +40,22 @@ FFMPEG_DIR = r'C:\Users\giris\AppData\Local\ffmpegio\ffmpeg-downloader\ffmpeg\bi
 def get_nas_download_dir() -> str:
     r"""
     Resolves the target NAS download folder path from config.json or environment variables.
-    Checks mapped drive letter (e.g. Z:\Downloads) first, then UNC network path (\\host\share\Downloads).
+
+    Priority order:
+      1. NAS_DOWNLOAD_PATH env var — used by Docker container (volume mount at /nas_downloads)
+      2. Z:\Downloads — Windows SMB mapped drive (dev machine default)
+      3. \\host\share\Downloads — UNC fallback
     """
+    # 1. Docker / Linux container env var override (highest priority)
+    env_override = os.environ.get("NAS_DOWNLOAD_PATH")
+    if env_override:
+        try:
+            os.makedirs(env_override, exist_ok=True)
+            logger.debug("Using NAS_DOWNLOAD_PATH override: %s", env_override)
+            return env_override
+        except Exception as e:
+            logger.warning("Could not create NAS_DOWNLOAD_PATH dir %s: %s", env_override, e)
+
     cfg_drive = "Z:"
     cfg_folder = "Downloads"
     try:

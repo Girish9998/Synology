@@ -3,7 +3,7 @@ import sys
 import uuid
 import logging
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -69,7 +69,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-NAS-Archiving"],
 )
 
 class DownloadRequest(BaseModel):
@@ -101,8 +101,22 @@ async def log_client_message(request: ClientLogRequest):
         
     return {"status": "success"}
 
+def _archive_to_nas(filepath: str, filename: str) -> None:
+    """Background task to archive downloaded audio file to Synology NAS without delaying response."""
+    try:
+        nas_path = save_file_to_nas(filepath)
+        if nas_path:
+            logger.info("Background NAS archive complete: %s", nas_path)
+            log_operation("NAS_ARCHIVE", nas_path, f"Archived {filename} to Synology NAS")
+        else:
+            logger.warning("Background NAS archive returned None for file: %s", filepath)
+    except Exception as e:
+        logger.error("Exception during background NAS archive of %s: %s", filepath, e)
+        log_failure("NAS_ARCHIVE", filepath, str(e), exc=e)
+
+
 @app.post("/api/download")
-async def download_audio(request: DownloadRequest):
+async def download_audio(request: DownloadRequest, background_tasks: BackgroundTasks):
     logger.info("Received download request for URL: %s", request.url)
     logger.debug("Request details - start_time: %s, end_time: %s", request.start_time, request.end_time)
     
@@ -126,17 +140,15 @@ async def download_audio(request: DownloadRequest):
         logger.info("Successfully processed audio download: %s -> %s", request.url, filename)
         logger.debug("File stored locally at: %s", filepath)
 
-        # Archive to Synology NAS download folder
-        nas_path = save_file_to_nas(filepath)
-        if nas_path:
-            logger.info("Successfully saved file to Synology NAS download folder: %s", nas_path)
-            log_operation("API_DOWNLOAD", filepath, f"Downloaded and saved to NAS: {nas_path}")
+        # Archive to Synology NAS download folder in background (does not block client streaming)
+        background_tasks.add_task(_archive_to_nas, filepath, filename)
 
-        # Return the file as a downloadable attachment
+        # Return the file as a downloadable attachment with confirmation header
         return FileResponse(
             path=filepath,
             filename=filename,
-            media_type='audio/mpeg'
+            media_type='audio/mpeg',
+            headers={"X-NAS-Archiving": "true"}
         )
 
     except Exception as e:

@@ -217,6 +217,19 @@ button:active {
     letter-spacing: 0.5px;
 }
 
+.nas-badge {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: #bfa8ff;
+    font-weight: 400;
+    background: rgba(138, 43, 226, 0.15);
+    padding: 0.3rem 0.8rem;
+    border-radius: 8px;
+    border: 1px solid rgba(138, 43, 226, 0.3);
+    animation: fadeIn 0.4s ease;
+}
+
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }

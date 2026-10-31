@@ -169,7 +169,12 @@
             a.remove();
             URL.revokeObjectURL(urlObject);
 
-            statusDiv.textContent = '✅ Download complete!';
+            const isNasArchiving = response.headers.get('x-nas-archiving') === 'true' || response.headers.get('X-NAS-Archiving') === 'true';
+            if (isNasArchiving) {
+                statusDiv.innerHTML = '✅ Download complete!<br><span class="nas-badge">💾 Also saved to Synology NAS Downloads</span>';
+            } else {
+                statusDiv.textContent = '✅ Download complete!';
+            }
             statusDiv.style.color = '#4caf50';
             progressStage.textContent = 'Done!';
             Logger.info("Download session completed successfully.");
